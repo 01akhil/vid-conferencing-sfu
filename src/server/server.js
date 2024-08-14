@@ -1,22 +1,22 @@
 
 
 import express from 'express'
+import http from 'http';
+import { Server } from 'socket.io'
+import mediasoup from 'mediasoup'
+import fs from 'fs'
+import path from 'path'
+
 const app = express()
-const port = 3000;
+const port = 3000;  //here we will run server
 
 
 app.use(express.json());
 
 
-import fs from 'fs'
-import path from 'path'
-const __dirname = path.resolve()
-import http from 'http';
-import { Server } from 'socket.io'
-import mediasoup from 'mediasoup'
+const __dirname = path.resolve()  //absolute path of the current working directory
 
-
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(path.join(__dirname))); //to serve static files
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname,'home.html'));
@@ -34,26 +34,30 @@ httpsServer.listen(port, () => {
   console.log('listening on port: ' + ( port))
 })
 
-const io = new Server(httpsServer)
+const io = new Server(httpsServer) //initializing the new socket.io instance and attaching it to existing server 
 
 
-const connections = io.of('/mediasoup')
-
-// const chatNamespace = io.of('/chat');
-// io.of('/chat').on('connection',socket=>{
-//   console.log("user connected to chat successfully")
-// socket.on('chat-message',(message)=>{
-//   console.log("received chat message in server", message);
-//   io.of('/chat').emit('chat-message',message);
-// });
+const connections = io.of('/vidCalling') //using namespace "vidCalling" to connect with client and have a seperate channel to facilitate video calling with client
 
 
+io.of('/chat').on('connection', (socket) => {
+  console.log('A user connected to chat');
 
-// socket.on('disconnect', () => {
-//   console.log('User disconnected from chat');
-// });
+  socket.on('joinRoom', (roomName) => {
+    socket.join(roomName);
+    console.log(`User joined room: ${roomName}`);
+  });
 
-// });
+  socket.on('chat-message', ({ message, roomName }) => {
+    console.log(`Message received for room ${roomName}: ${message}`);
+    io.of('/chat').to(roomName).emit('chat-message', { message, room: roomName });
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected from chat');
+  });
+});
+
 
 let worker
 let rooms = {}          
@@ -62,26 +66,29 @@ let transports = []
 let producers = []      
 let consumers = []     
 
+//following mediaosoup-architecture from here
+
+// creating function to create worker
 const createWorker = async () => {
   worker = await mediasoup.createWorker({
-    rtcMinPort:2000,
+    rtcMinPort:2000,                                //defining UDP ports for transmiting media streams
     rtcMaxPort:2050,
   })
   console.log(`worker pid ${worker.pid}`)
 
-  worker.on('died', error => {
+  worker.on('died', error => {                    //handling if worker dies
   
     console.error('mediasoup worker has died')
-    setTimeout(() => process.exit(1), 2000) 
+    setTimeout(() => process.exit(1), 2000)     //giving time to cleanup or log error before terminating
   })
 
   return worker
 }
 
-
+//step1: creating worker
 worker = createWorker()
 
-
+//defining format of media in which steam will be decoded or encoded by mediasoup
 const mediaCodecs = [
   {
     kind: 'audio',
@@ -94,21 +101,25 @@ const mediaCodecs = [
     mimeType: 'video/VP8',
     clockRate: 90000,
     parameters: {
-      'x-google-start-bitrate': 1000,
+      'x-google-start-bitrate': 1000,   //increasing bitrate can increase quality of video but can hamper the overall performance
     },
   },
 ]
 
+
+//here connections is namespace that we declared earlier will be used to take care of vidCalling channel
+//connection is a event of socket, it will be emitted when a new client joins with same namespace as server
+
 connections.on('connection', async socket => {
   console.log(socket.id)
-  socket.emit('connection-success', {
-    socketId: socket.id,
+  socket.emit('connection-success', {               //now emitting or telling client that the connection was successful
+    socketId: socket.id,                            //giving socket id of connection to client
   })
 
-  const removeItems = (items, socketId, type) => {
+  const removeItems = (items, socketId, type) => {      //creating function which will help us to remove items of client when it gets disconnected
     items.forEach(item => {
       if (item.socketId === socket.id) {
-        item[type].close()
+        item[type].close()                        //closing resources for that peer
       }
     })
     items = items.filter(item => item.socketId !== socket.id)
@@ -117,33 +128,33 @@ connections.on('connection', async socket => {
   }
 
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', () => {                           //if client gets disconnected from server
     console.log('peer disconnected');
   
    
     const peer = peers[socket.id];
     if (peer) {
-      consumers = removeItems(consumers, socket.id, 'consumer');
-      producers = removeItems(producers, socket.id, 'producer');
-      transports = removeItems(transports, socket.id, 'transport');
+      consumers = removeItems(consumers, socket.id, 'consumer');      //removing consumers of that peer
+      producers = removeItems(producers, socket.id, 'producer');    //removing producers of that peer
+      transports = removeItems(transports, socket.id, 'transport');   //removing transports of that peer
   
-      const { roomName } = peer; 
+      const { roomName } = peer;                    //getting room number in which that peer was residing
   
       rooms[roomName] = {
         router: rooms[roomName].router,
-        peers: rooms[roomName].peers.filter(socketId => socketId !== socket.id)
+        peers: rooms[roomName].peers.filter(socketId => socketId !== socket.id)   //removing that peer from room
       };
   
-      delete peers[socket.id];
+      delete peers[socket.id];                         //deleting that peer from peers
     } else {
-      console.log('Socket ID not found in peers');
+      console.log('Socket ID not found in peers');    //for getting aware of some unexpected error
     }
   });
   
 
-  socket.on('joinRoom', async ({ roomName }, callback) => {
-    
-    const router1 = await createRoom(roomName, socket.id)
+  socket.on('joinRoom', async ({ roomName }, callback) => {     //when client will ask for joining the rooom
+      
+    const router1 = await createRoom(roomName, socket.id)     // using routers to create rooms
 
     peers[socket.id] = {
       socket,
@@ -161,28 +172,28 @@ connections.on('connection', async socket => {
     const rtpCapabilities = router1.rtpCapabilities
 
     
-    callback({ rtpCapabilities })
+    callback({ rtpCapabilities })                                 //giving media capabilities to client
   })
 
   const createRoom = async (roomName, socketId) => {
    
     let router1
     let peers = []
-    if (rooms[roomName]) {
-      router1 = rooms[roomName].router
-      peers = rooms[roomName].peers || []
+    if (rooms[roomName]) {                      //if that room is already present 
+      router1 = rooms[roomName].router            //get that router
+      peers = rooms[roomName].peers || []             //and get peers
     } else {
-      router1 = await worker.createRouter({ mediaCodecs, })
+      router1 = await worker.createRouter({ mediaCodecs, })       //if not, then create a new router
     }
     
-    console.log(`Router ID: ${router1.id}`, peers.length)
+    console.log(`Router ID: ${router1.id}`, peers.length)       
 
-    rooms[roomName] = {
-      router: router1,
-      peers: [...peers, socketId],
+    rooms[roomName] = {                       
+      router: router1,                          //set router of that client
+      peers: [...peers, socketId],              //and set its socketID in list of peer i.e make in a peer in that room
     }
 
-    return router1
+    return router1                              //return with router or room
   }
 
   

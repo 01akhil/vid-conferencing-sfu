@@ -4,32 +4,48 @@ const mediasoupClient = require('mediasoup-client')
 
 const roomName = window.location.pathname.split('/')[2]
 
-const socket = io("/mediasoup")
+const socket = io("/vidCalling") //using same namespace here to esatblish connection between socket.io and socket.io-client
 
-// const chatSocket=io("/chat");
+const chatSocket = io('/chat'); // Namespace for chat
 
-// const sendChatMessage = (message) => {
-//   chatSocket.emit('chat-message', message);
-// };
+// Join the room after connection
+chatSocket.on('connect', () => {
+  chatSocket.emit('joinRoom', roomName);
+});
 
-// chatSocket.on('chat-message',(message)=>{
-//   console.log("received chat message",message);
-  
-//   const chatBox = document.getElementById('chat-box');
-//   chatBox.innerHTML += `<p>${message}</p>`;
-// });
+const sendChatMessage = (message) => {
+  chatSocket.emit('chat-message', { message, roomName });
+};
 
-// document.getElementById('chat-form').addEventListener('submit', (e) => {
-//   e.preventDefault();
-//   const messageInput = document.getElementById('chat-input');
-//   const message = messageInput.value;
-//   sendChatMessage(message);
-//   messageInput.value = ''; // Clear input field
-// });
+chatSocket.on('chat-message', ({ message, room }) => {
+  if (room === roomName) {
+    console.log("Received chat message:", message);
+    const chatBox = document.getElementById('chat-box');
+    chatBox.innerHTML += `<p>${message}</p>`;
+  }
+});
 
-socket.on('connection-success', ({ socketId }) => {
-  console.log(socketId)
-  getLocalStream()
+document.getElementById('chat-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const messageInput = document.getElementById('chat-input');
+  const message = messageInput.value;
+  sendChatMessage(message);
+  messageInput.value = ''; // Clear input field
+});
+
+document.getElementById('chat-form').addEventListener('submit', (e) => {
+  e.preventDefault()
+  const messageInput = document.getElementById('chat-input')
+  const message = messageInput.value
+  sendChatMessage(message)
+  messageInput.value = '' // Clear input field
+})
+
+document.getElementById('chat-input').setAttribute('autocomplete', 'off');
+
+socket.on('connection-success', ({ socketId }) => {     //client will react when server send connection-success
+  console.log(socketId)                   
+  getLocalStream()                                      //client will start getting its local stream
 })
 
 let device
@@ -72,26 +88,26 @@ let videoParams = { params };
 let consumingTransports = [];
 
 const streamSuccess = (stream) => {
-  localVideo.srcObject = stream
+  localVideo.srcObject = stream                   //just putting streaming in the video src
 
   audioParams = { track: stream.getAudioTracks()[0], ...audioParams };
   videoParams = { track: stream.getVideoTracks()[0], ...videoParams };
 
-  joinRoom()
+  joinRoom()                                        //joining the room
 }
 
 const joinRoom = () => {
-  socket.emit('joinRoom', { roomName }, (data) => {
-    console.log(`Router RTP Capabilities... ${data.rtpCapabilities}`)
-   
+  socket.emit('joinRoom', { roomName }, (data) => {                     //client is asking server to join in room
+    console.log(`Router RTP Capabilities... ${data.rtpCapabilities}`)   //server sends room number and rtp cap.
+    
     rtpCapabilities = data.rtpCapabilities
 
-    createDevice()
+    createDevice()                               //creating device--> this will check whether our strean is suitable for transmission or not
   })
 }
 
 const getLocalStream = () => {
-  navigator.mediaDevices.getUserMedia({
+  navigator.mediaDevices.getUserMedia({       //getting access from browser for audio and video
     audio: true,
     video: {
       width: {
@@ -104,20 +120,20 @@ const getLocalStream = () => {
       }
     }
   })
-  .then(streamSuccess)
+  .then(streamSuccess)                    //if permission is granted, then streamSuccess function will be called
   .catch(error => {
     console.log(error.message)
   })
 }
 
-const createDevice = async () => {
+const createDevice = async () => {          
   try {
-    device = new mediasoupClient.Device()
+    device = new mediasoupClient.Device()         //using mediasoup lib to create device
 
 
     await device.load({
      
-      routerRtpCapabilities: rtpCapabilities
+      routerRtpCapabilities: rtpCapabilities        //loading device with rtpc cap. which earlier we got from server on joining room
     })
 
     console.log('Device RTP Capabilities', device.rtpCapabilities)
